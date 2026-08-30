@@ -60,8 +60,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     if (code === 'auth/invalid-email') {
       return 'Please enter a valid email address.';
     }
+    if (code === 'auth/unauthorized-domain') {
+      return 'Firebase Authorized Domain Error: The current domain/URL is not listed in your Firebase Console Authorized Domains. Please add this domain or your *.run.app domain in Firebase Console -> Authentication -> Settings -> Authorized Domains.';
+    }
+    if (code === 'auth/popup-blocked') {
+      return 'Google sign-in popup was blocked by your browser. Please allow popups or open the app in a dedicated tab.';
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return 'Google Sign-In is not enabled in your Firebase Console. Go to Firebase Console -> Authentication -> Sign-in method and enable Google provider.';
+    }
     if (code === 'auth/popup-closed-by-user') {
-      return 'Google sign-in window was closed. Please try again.';
+      return 'Google sign-in window was closed before completing.';
     }
     if (code === 'auth/network-request-failed') {
       return 'Network error. Please verify your internet connection.';
