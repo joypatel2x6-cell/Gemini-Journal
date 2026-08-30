@@ -105,12 +105,13 @@ export const TimeCapsuleModal: React.FC<TimeCapsuleModalProps> = ({
         }),
       });
 
-      if (!res.ok) {
-        throw new Error('Failed to generate wisdom bridge.');
-      }
+      const data = await res.json().catch(() => null);
 
-      const data = await res.json();
-      setWisdomResult(data);
+      if (data && (data.letterFromPast || data.growthObserved)) {
+        setWisdomResult(data);
+      } else {
+        throw new Error(data?.error || 'Failed to generate wisdom bridge.');
+      }
     } catch (err: any) {
       console.error('Time capsule wisdom error:', err);
       setWisdomError(err?.message || 'Error generating wisdom reflection.');

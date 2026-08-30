@@ -228,12 +228,12 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       body: JSON.stringify({ title, content, mood, tags }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Failed to analyze journal entry' }));
-      throw new Error(err.error || 'AI analysis request failed.');
+    const data = await res.json().catch(() => null);
+    if (!res.ok && !data?.summary) {
+      throw new Error(data?.error || 'AI analysis request failed.');
     }
 
-    return await res.json();
+    return data as AIAnalysis;
   };
 
   // Gemini AI Prompt suggestions call to server
@@ -248,12 +248,11 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       body: JSON.stringify({ currentMood, recentTags, theme }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Failed to fetch prompt suggestions' }));
-      throw new Error(err.error || 'Prompt suggestion request failed.');
+    const data = await res.json().catch(() => null);
+    if (!res.ok && !data?.prompts) {
+      throw new Error(data?.error || 'Prompt suggestion request failed.');
     }
 
-    const data = await res.json();
     return data.prompts || [];
   };
 
@@ -267,12 +266,12 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({ child
       body: JSON.stringify({ entries, period }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Failed to generate insights' }));
-      throw new Error(err.error || 'Insights generation failed.');
+    const data = await res.json().catch(() => null);
+    if (!res.ok && !data?.summary) {
+      throw new Error(data?.error || 'Insights generation failed.');
     }
 
-    return await res.json();
+    return data as InsightsReport;
   };
 
   // Statistics calculation (streaks, words, mood counts)

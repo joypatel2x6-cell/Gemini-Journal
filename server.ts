@@ -12,7 +12,7 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// Secret Manager Client (uses Application Default Credentials / Runtime Service Account)
+// Secret Manager Client (lazy initialization - only used if process.env.GEMINI_API_KEY is not provided)
 let secretManagerClient: SecretManagerServiceClient | null = null;
 function getSecretManagerClient(): SecretManagerServiceClient {
   if (!secretManagerClient) {
@@ -28,11 +28,17 @@ let secretFetchInProgress: Promise<string | null> | null = null;
 /**
  * Retrieve Gemini API Key securely:
  * 1. Checks in-memory cache first
- * 2. Attempts retrieval from Google Cloud Secret Manager ("gemini-api-key") using ADC
- * 3. Falls back to process.env.GEMINI_API_KEY for local development / testing
+ * 2. Checks process.env.GEMINI_API_KEY directly (primary for Vercel & local development)
+ * 3. Falls back to Google Cloud Secret Manager if GCP credentials exist
  */
 async function getGeminiApiKey(): Promise<string | null> {
   if (cachedGeminiApiKey) {
+    return cachedGeminiApiKey;
+  }
+
+  // 1. Direct environment variable (standard on Vercel and local environments)
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) {
+    cachedGeminiApiKey = process.env.GEMINI_API_KEY.trim();
     return cachedGeminiApiKey;
   }
 
@@ -42,39 +48,30 @@ async function getGeminiApiKey(): Promise<string | null> {
   }
 
   secretFetchInProgress = (async () => {
-    // 1. Attempt retrieval from Google Cloud Secret Manager
-    const secretName = process.env.GEMINI_SECRET_NAME || 'gemini-api-key';
+    // 2. Fallback to Google Cloud Secret Manager only if GCP project is present and not on Vercel
+    const isVercel = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCP_PROJECT;
 
-    if (projectId || process.env.NODE_ENV === 'production') {
+    if (!isVercel && projectId) {
       try {
         const client = getSecretManagerClient();
-        const formattedName = projectId
-          ? `projects/${projectId}/secrets/${secretName}/versions/latest`
-          : `projects/current/secrets/${secretName}/versions/latest`;
+        const secretName = process.env.GEMINI_SECRET_NAME || 'gemini-api-key';
+        const formattedName = `projects/${projectId}/secrets/${secretName}/versions/latest`;
 
         const accessPromise = client.accessSecretVersion({ name: formattedName });
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Secret Manager lookup timed out')), 2000)
+          setTimeout(() => reject(new Error('Secret Manager lookup timed out')), 1500)
         );
 
         const [version] = await Promise.race([accessPromise, timeoutPromise]);
         const secretPayload = version?.payload?.data?.toString();
         if (secretPayload && secretPayload.trim().length > 0) {
           cachedGeminiApiKey = secretPayload.trim();
-          console.log('[Security Audit] Successfully retrieved Gemini API key from Google Cloud Secret Manager (secret: gemini-api-key).');
           return cachedGeminiApiKey;
         }
       } catch (err: any) {
-        // Log note without leaking credentials or internal metadata
-        console.warn('[Security Audit] Secret Manager note:', err?.message || 'ADC Secret Manager access was not available in this environment.');
+        console.warn('[Security Audit] Secret Manager note:', err?.message || 'Secret Manager unavailable.');
       }
-    }
-
-    // 2. Fallback to process.env for local development or container environment
-    if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) {
-      cachedGeminiApiKey = process.env.GEMINI_API_KEY.trim();
-      return cachedGeminiApiKey;
     }
 
     return null;
@@ -108,14 +105,18 @@ async function getGenAI(): Promise<GoogleGenAI | null> {
   return genAIClient;
 }
 
-// Helper for robust multi-model execution with automatic fallback
-const CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
-  'gemini-2.5-flash',
-  'gemini-3.7-flash',
-  'gemini-3.1-flash-lite',
-  'gemini-flash-latest',
-].filter(Boolean) as string[];
+// Configurable model with validated supported models
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      process.env.GEMINI_MODEL,
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+    ].filter(Boolean) as string[]
+  )
+);
 
 async function generateContentWithFallback(ai: any, options: { contents: any; config?: any }) {
   let lastError: any = null;
@@ -140,20 +141,20 @@ async function generateContentWithFallback(ai: any, options: { contents: any; co
 }
 
 // Health check endpoint (never exposes secret values)
-app.get('/api/health', async (req, res) => {
-  const keyAvailable = !!(await getGeminiApiKey());
+app.get(['/api/health', '/health'], async (req, res) => {
+  const key = await getGeminiApiKey();
   res.json({
     status: 'ok',
-    hasGeminiKey: keyAvailable,
-    secretSource: cachedGeminiApiKey ? (process.env.GOOGLE_CLOUD_PROJECT ? 'google-cloud-secret-manager' : 'runtime-environment') : 'none',
+    hasGeminiKey: Boolean(key && key.trim().length > 0),
+    model: DEFAULT_MODEL,
     timestamp: new Date().toISOString(),
   });
 });
 
 // 1. Analyze Journal Entry
-app.post('/api/gemini/analyze', async (req, res) => {
+app.post(['/api/gemini/analyze', '/gemini/analyze'], async (req, res) => {
   try {
-    const { title, content, mood, tags } = req.body;
+    const { title, content, mood, tags } = req.body || {};
 
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
       return res.status(400).json({ error: 'Journal content is required for analysis.' });
@@ -166,7 +167,7 @@ app.post('/api/gemini/analyze', async (req, res) => {
       return res.json({
         detectedMood: mood || 'thoughtful',
         emotionalTone: 'Reflective and sincere',
-        summary: `You took time today to record your thoughts regarding "${title || 'your day'}". Taking time to journal supports mental clarity and self-awareness.`,
+        summary: `You took time today to record your thoughts regarding "${title || 'your day'}". Taking time to journal supports mental clarity, self-awareness, and emotional calm.`,
         positiveMoments: [
           'Taking dedicated time to pause and document your personal experiences.',
           'Showing self-honesty and openness in your journal reflections.',
@@ -179,7 +180,7 @@ app.post('/api/gemini/analyze', async (req, res) => {
           'What did you learn from today that you would like to carry forward into tomorrow?',
         ],
         recommendedPrompts: [
-          'Write about a peaceful place that restores your calm.',
+          'Write about a peaceful place or memory that restores your calm.',
           'What is something unexpected that brought you a moment of clarity this week?',
         ],
         growthOpportunity: 'Cultivating mindfulness through consistent reflection helps ground your day.',
@@ -188,70 +189,56 @@ app.post('/api/gemini/analyze', async (req, res) => {
       });
     }
 
-    const prompt = `You are a supportive, mindful, empathetic personal journaling companion.
-Analyze the following personal journal entry with deep empathy and gentle psychological insight.
-
-Journal Title: ${title || 'Untitled'}
-Stated Mood: ${mood || 'Not specified'}
-Tags: ${Array.isArray(tags) ? tags.join(', ') : 'None'}
-Journal Content:
+    const promptText = `You are a warm, empathetic, and psychologically grounded mindfulness journal companion.
+Analyze the following personal journal entry:
+Title: "${title || 'Untitled'}"
+User-tagged Mood: ${mood || 'Not specified'}
+Tags: ${tags && tags.length ? tags.join(', ') : 'None'}
+Content:
 """
-${content.slice(0, 10000)}
+${content.slice(0, 5000)}
 """
 
-CRITICAL INSTRUCTIONS:
-1. Provide a warm, uplifting, and psychologically grounded analysis.
-2. Highlight genuine positive moments and things to be grateful for.
-3. Gently acknowledge potential stressors, worries, or friction areas without being alarming.
-4. Provide 2-3 gentle, curious reflection questions that encourage self-compassion.
-5. Provide 2 personalized follow-up prompts for future journaling.
-6. ABSOLUTE RULE: Never provide medical, diagnostic, or clinical mental-health advice. Always maintain a gentle, reflective, peer-like journaling companion tone.`;
+Please provide a supportive, structured psychological and emotional reflection in JSON:
+- detectedMood: Specific primary emotion or nuanced headspace detected
+- emotionalTone: 2-4 word descriptor of the tone
+- summary: 2-3 sentence empathetic synthesis of what they experienced or expressed
+- positiveMoments: Array of 1-3 strengths, bright spots, or acts of resilience
+- concernsOrStressors: Array of 1-2 underlying tensions, questions, or worries observed
+- reflectionQuestions: Array of 2 gentle, thought-provoking questions to deepen their self-inquiry
+- recommendedPrompts: Array of 2 follow-up prompts related to this entry
+- growthOpportunity: 1 constructive, encouraging thought on emotional growth or self-care
+- disclaimer: Include: "This AI reflection is for personal introspection and self-discovery only, not medical or mental health advice."`;
 
     const response = await generateContentWithFallback(ai, {
-      contents: prompt,
+      contents: promptText,
       config: {
-        systemInstruction:
-          'You are an empathetic, insightful journaling AI assistant. You help people reflect on their daily experiences, celebrate wins, navigate emotional nuances, and foster self-compassion. You NEVER provide medical, psychiatric, or diagnostic advice.',
+        systemInstruction: 'You are an insightful, gentle, and emotionally intelligent journaling mentor. You never judge, diagnose, or prescribe medical treatments.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            detectedMood: {
-              type: Type.STRING,
-              description: 'The primary detected emotional state (e.g. Grateful & Grounded, Thoughtful, Cautiously Optimistic, Overwhelmed, etc.)',
-            },
-            emotionalTone: {
-              type: Type.STRING,
-              description: 'A 2-4 word description of the nuanced emotional climate of the entry',
-            },
-            summary: {
-              type: Type.STRING,
-              description: 'A compassionate 2-3 sentence summary of the journal entry',
-            },
+            detectedMood: { type: Type.STRING },
+            emotionalTone: { type: Type.STRING },
+            summary: { type: Type.STRING },
             positiveMoments: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: '2-4 positive moments, strengths shown, or gratitudes identified in the text',
             },
             concernsOrStressors: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: '1-3 gentle observations of areas causing tension, fatigue, or worry',
             },
             reflectionQuestions: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: '2-3 gentle, thought-provoking questions for deeper self-reflection',
             },
             recommendedPrompts: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: '2 actionable prompts for the next journaling session',
             },
-            growthOpportunity: {
-              type: Type.STRING,
-              description: 'A brief sentence on a personal growth insight or mindset shift',
-            },
+            growthOpportunity: { type: Type.STRING },
+            disclaimer: { type: Type.STRING },
           },
           required: [
             'detectedMood',
@@ -261,29 +248,50 @@ CRITICAL INSTRUCTIONS:
             'concernsOrStressors',
             'reflectionQuestions',
             'recommendedPrompts',
+            'growthOpportunity',
+            'disclaimer',
           ],
         },
       },
     });
 
     const parsed = JSON.parse(response.text || '{}');
-    parsed.disclaimer = 'This AI reflection is for personal introspection and self-discovery only, not medical or mental health advice.';
     parsed.analyzedAt = new Date().toISOString();
-
     res.json(parsed);
   } catch (error: any) {
     console.error('Error analyzing journal entry with Gemini:', error);
-    res.status(500).json({
-      error: 'Unable to analyze journal entry at this time.',
+    const { title, mood } = req.body || {};
+    res.json({
+      detectedMood: mood || 'thoughtful',
+      emotionalTone: 'Reflective and sincere',
+      summary: `You took time today to record your thoughts regarding "${title || 'your day'}". Taking time to journal supports mental clarity, self-awareness, and emotional calm.`,
+      positiveMoments: [
+        'Taking dedicated time to pause and document your personal experiences.',
+        'Showing self-honesty and openness in your journal reflections.',
+      ],
+      concernsOrStressors: [
+        'Navigating everyday responsibilities and balancing personal energy.',
+      ],
+      reflectionQuestions: [
+        'What is one small kindness you can extend to yourself right now?',
+        'What did you learn from today that you would like to carry forward into tomorrow?',
+      ],
+      recommendedPrompts: [
+        'Write about a peaceful place or memory that restores your calm.',
+        'What is something unexpected that brought you a moment of clarity this week?',
+      ],
+      growthOpportunity: 'Cultivating mindfulness through consistent reflection helps ground your day.',
       disclaimer: 'This AI reflection is for personal introspection and self-discovery only, not medical or mental health advice.',
+      analyzedAt: new Date().toISOString(),
+      fallback: true,
     });
   }
 });
 
 // 2. Generate Personalized Prompts
-app.post('/api/gemini/prompt-suggestions', async (req, res) => {
+app.post(['/api/gemini/prompt-suggestions', '/gemini/prompt-suggestions'], async (req, res) => {
   try {
-    const { currentMood, recentTags, theme } = req.body;
+    const { currentMood, recentTags, theme } = req.body || {};
     const ai = await getGenAI();
 
     if (!ai) {
@@ -346,14 +354,38 @@ Make the prompts deeply evocative, warm, and inviting.`;
     res.json(parsed);
   } catch (error: any) {
     console.error('Error generating prompts with Gemini:', error);
-    res.status(500).json({ error: 'Failed to generate prompt suggestions.' });
+    res.json({
+      prompts: [
+        {
+          title: 'Present Moment Awareness',
+          prompt: 'What are three sensory details (sounds, sights, sensations) you notice right now in your space?',
+          category: 'mindfulness',
+        },
+        {
+          title: 'Unsung Strengths',
+          prompt: 'Think back to a challenge from this past week. What personal quality helped you handle it?',
+          category: 'growth',
+        },
+        {
+          title: 'Quiet Gratitude',
+          prompt: 'Who is someone whose presence made your day a little lighter recently, and why?',
+          category: 'gratitude',
+        },
+        {
+          title: 'Letting Go',
+          prompt: 'What is one expectation or worry you are ready to set down before the day ends?',
+          category: 'release',
+        },
+      ],
+      fallback: true,
+    });
   }
 });
 
 // 3. Generate Holistic Insights & Multi-Entry Trends
-app.post('/api/gemini/generate-insights', async (req, res) => {
+app.post(['/api/gemini/generate-insights', '/gemini/generate-insights'], async (req, res) => {
   try {
-    const { entries, period = 'all' } = req.body;
+    const { entries, period = 'all' } = req.body || {};
 
     if (!Array.isArray(entries) || entries.length === 0) {
       return res.status(400).json({ error: 'At least one journal entry is needed to generate insights.' });
@@ -386,7 +418,7 @@ app.post('/api/gemini/generate-insights', async (req, res) => {
     }
 
     const entriesSummary = entries.slice(0, 20).map((e: any) => ({
-      date: e.entryDate || new Date(e.createdAt).toISOString().split('T')[0],
+      date: e.entryDate || (e.createdAt ? new Date(e.createdAt).toISOString().split('T')[0] : 'Recent'),
       title: e.title,
       mood: e.mood,
       tags: e.tags,
@@ -456,14 +488,36 @@ Provide a deeply encouraging, insightful, and constructive personal report. NEVE
     res.json(parsed);
   } catch (error: any) {
     console.error('Error generating holistic insights with Gemini:', error);
-    res.status(500).json({ error: error?.message || 'Failed to generate insights.' });
+    const { period = 'all' } = req.body || {};
+    res.json({
+      period,
+      summary: `Across your journal entries, you've maintained consistent self-awareness and mindful introspection. Your writing demonstrates resilience and an active dedication to self-care and mental clarity.`,
+      emotionalEvolution: `Your reflections capture natural emotional ebbs and flows, with a steady trajectory toward grounding and inner perspective.`,
+      positivePatterns: [
+        'Engaging in regular expressive writing to navigate feelings.',
+        'Honoring personal boundaries and intentional reflections.',
+        'Celebrating daily moments of clarity and accomplishment.',
+      ],
+      recurringThemes: [
+        'Mindfulness & Emotional Balance',
+        'Personal Growth & Meaningful Reflection',
+        'Gratitude & Daily Presence',
+      ],
+      growthReflections: [
+        'Notice how taking a moment to write restores calm during demanding days.',
+        'Continue embracing both high-energy days and quiet introspective periods.',
+      ],
+      gentleAffirmation: 'Your reflective practice is a powerful anchor for long-term clarity and emotional well-being.',
+      generatedAt: new Date().toISOString(),
+      fallback: true,
+    });
   }
 });
 
 // 4. Multi-turn AI Brainstorming & Journaling Conversation
-app.post('/api/gemini/chat', async (req, res) => {
+app.post(['/api/gemini/chat', '/gemini/chat'], async (req, res) => {
   try {
-    const { messages, context } = req.body;
+    const { messages, context } = req.body || {};
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages array is required for conversation.' });
@@ -526,7 +580,6 @@ ABSOLUTE RULE: Never provide medical, diagnostic, or clinical psychiatric advice
     });
   } catch (error: any) {
     console.error('Error in multi-turn Gemini chat:', error);
-    // Graceful fallback response on unexpected connection errors
     res.json({
       reply: `I received your thought: "${(req.body?.messages?.slice(-1)[0]?.content || '').slice(0, 60)}...". How does reflecting on this connect to how you're feeling right now?`,
       fallback: true,
@@ -535,9 +588,9 @@ ABSOLUTE RULE: Never provide medical, diagnostic, or clinical psychiatric advice
 });
 
 // 5. Gemini Cognitive Perspective Shifter (Multi-Lens Cognitive Reframe)
-app.post('/api/gemini/perspective-shift', async (req, res) => {
+app.post(['/api/gemini/perspective-shift', '/gemini/perspective-shift'], async (req, res) => {
   try {
-    const { thought, context } = req.body;
+    const { thought, context } = req.body || {};
 
     if (!thought || typeof thought !== 'string' || thought.trim().length === 0) {
       return res.status(400).json({ error: 'A thought or situation is required for perspective shifting.' });
@@ -692,9 +745,9 @@ NEVER provide medical or psychiatric diagnosis.`;
 });
 
 // 6. Gemini Time Capsule Wisdom Bridge
-app.post('/api/gemini/time-capsule-wisdom', async (req, res) => {
+app.post(['/api/gemini/time-capsule-wisdom', '/gemini/time-capsule-wisdom'], async (req, res) => {
   try {
-    const { capsuleEntry, recentContext } = req.body;
+    const { capsuleEntry, recentContext } = req.body || {};
 
     if (!capsuleEntry || !capsuleEntry.content) {
       return res.status(400).json({ error: 'Capsule entry data is required.' });
@@ -705,8 +758,8 @@ app.post('/api/gemini/time-capsule-wisdom', async (req, res) => {
       return res.json({
         letterFromPast: `When you sealed this time capsule on ${new Date(capsuleEntry.createdAt || Date.now()).toLocaleDateString()}, you were carrying hope, intention, and curiosity for your future self.`,
         growthObserved: 'You continued to show up, navigate everyday changes, and preserve your personal story across time.',
-        celebrationMoment: 'Reaching this unlock date is a quiet milestone of consistency and self-connection.',
-        forwardAnchor: 'What promise would you like to make to your future self from where you stand today?',
+        celebrationMoment: 'Reaching this unlock date is a quiet milestone of consistency, resilience, and self-connection.',
+        forwardAnchor: 'What promise or mindful intention would you like to make to your future self from where you stand today?',
       });
     }
 
@@ -752,12 +805,33 @@ Generate a beautiful, profound "Wisdom Bridge" comparing their past headspace wi
     res.json(parsed);
   } catch (error: any) {
     console.error('Error in time capsule wisdom:', error);
-    res.status(500).json({ error: error?.message || 'Failed to generate time capsule reflection.' });
+    const { capsuleEntry } = req.body || {};
+    res.json({
+      letterFromPast: `When you sealed this time capsule on ${new Date(capsuleEntry?.createdAt || Date.now()).toLocaleDateString()}, you were carrying hope, intention, and curiosity for your future self.`,
+      growthObserved: 'You continued to show up, navigate everyday changes, and preserve your personal story across time.',
+      celebrationMoment: 'Reaching this unlock date is a quiet milestone of consistency, resilience, and self-connection.',
+      forwardAnchor: 'What promise or mindful intention would you like to make to your future self from where you stand today?',
+      fallback: true,
+    });
   }
 });
 
+// Catch-all JSON 404 for unhandled API requests
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
+});
 
-// Vite middleware & Static serving
+// Global JSON Error Handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Unhandled API Error:', err);
+  if (!res.headersSent) {
+    res.status(err?.status || 500).json({
+      error: err?.message || 'Internal server error occurred.',
+    });
+  }
+});
+
+// Vite middleware & Static serving for standalone Node / Cloud Run execution
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -778,4 +852,12 @@ async function startServer() {
   });
 }
 
-startServer();
+// Export Express app for Vercel Serverless Function execution
+export default app;
+export { app };
+
+// Only call app.listen() when running in standalone Node/container mode, NOT in Vercel serverless functions
+const isVercelServerless = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
+if (!isVercelServerless) {
+  startServer();
+}
