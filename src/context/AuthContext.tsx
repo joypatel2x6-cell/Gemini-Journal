@@ -72,17 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(null);
         }
       } else {
-        // Default local demo user so the user can immediately experience the app!
-        const defaultUser: UserProfile = {
-          uid: 'demo_user_gemini_journaler',
-          email: 'joypatel2x6@gmail.com',
-          displayName: 'Joy Patel',
-          photoURL: null,
-          isAnonymous: true,
-          providerId: 'demo',
-        };
-        setUser(defaultUser);
-        localStorage.setItem('pgj_demo_user', JSON.stringify(defaultUser));
+        setUser(null);
       }
       setLoading(false);
     }

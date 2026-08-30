@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { JournalProvider } from './context/JournalContext';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
@@ -7,11 +7,13 @@ import { JournalEditor } from './components/JournalEditor';
 import { EntriesList } from './components/EntriesList';
 import { AIInsightsView } from './components/AIInsightsView';
 import { AuthModal } from './components/AuthModal';
+import { AuthPage } from './components/AuthPage';
 import { FirebaseGuideModal } from './components/FirebaseGuideModal';
 import { JournalMood } from './types';
-import { Sparkles, ShieldCheck, Heart, Lock } from 'lucide-react';
+import { Sparkles, ShieldCheck, Lock, Loader2 } from 'lucide-react';
 
 const AppContent: React.FC = () => {
+  const { user, loading } = useAuth();
   const [activeTab, setActiveTab] = useState<'dashboard' | 'entries' | 'insights' | 'editor'>('dashboard');
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [editorInitialMood, setEditorInitialMood] = useState<JournalMood | undefined>(undefined);
@@ -37,6 +39,34 @@ const AppContent: React.FC = () => {
       localStorage.setItem('pgj_dark_mode', 'false');
     }
   }, [darkMode]);
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-stone-100/70 dark:bg-stone-950 flex flex-col items-center justify-center p-4 space-y-4">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-600 via-amber-500 to-yellow-400 flex items-center justify-center text-white shadow-lg animate-pulse">
+          <Sparkles className="w-7 h-7" />
+        </div>
+        <div className="flex items-center gap-2 text-stone-600 dark:text-stone-400 text-sm font-medium">
+          <Loader2 className="w-4 h-4 animate-spin text-amber-500" />
+          <span>Opening your private vault...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If user is not authenticated, show Login & Sign-up Page
+  if (!user) {
+    return (
+      <>
+        <AuthPage onOpenFirebaseGuide={() => setIsFirebaseGuideModalOpen(true)} />
+        <FirebaseGuideModal
+          isOpen={isFirebaseGuideModalOpen}
+          onClose={() => setIsFirebaseGuideModalOpen(false)}
+        />
+      </>
+    );
+  }
 
   // Handlers for switching views
   const handleStartNewEntry = (initialMood?: JournalMood, initialPrompt?: string) => {
