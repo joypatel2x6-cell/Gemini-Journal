@@ -1,0 +1,111 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name"
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User avatar URL"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation"
+        }
+      },
+      "required": ["uid", "email"]
+    },
+    "JournalEntry": {
+      "title": "JournalEntry",
+      "description": "A private personal journal entry belonging exclusively to the author",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Document ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Author UID corresponding to the parent path"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Title of the journal entry"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 50000,
+          "description": "Journal text body"
+        },
+        "mood": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Selected emotional state"
+        },
+        "tags": {
+          "type": "array",
+          "description": "List of string tags"
+        },
+        "wordCount": {
+          "type": "number",
+          "description": "Calculated total word count"
+        },
+        "readingTimeMinutes": {
+          "type": "number",
+          "description": "Estimated reading time in minutes"
+        },
+        "entryDate": {
+          "type": "string",
+          "maxLength": 20,
+          "description": "Date string in YYYY-MM-DD format"
+        },
+        "isFavorite": {
+          "type": "boolean",
+          "description": "Starred or favorited indicator"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation timestamp in ms"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Last updated timestamp in ms"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "title",
+        "content",
+        "mood",
+        "entryDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile records"
+    },
+    "/users/{userId}/entries/{entryId}": {
+      "schema": "JournalEntry",
+      "description": "Individual private journal entries isolated under the author's UID"
+    }
+  }
+}

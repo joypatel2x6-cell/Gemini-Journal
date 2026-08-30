@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Test connectivity
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // User Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create, update: if isOwner(userId) &&
+        isValidId(userId) &&
+        incoming().uid == request.auth.uid;
+      allow delete: if isOwner(userId);
+
+      // Private User Journal Entries (Strictly isolated by UID)
+      match /entries/{entryId} {
+        allow get, list: if isOwner(userId);
+        
+        allow create: if isOwner(userId) &&
+          isValidId(entryId) &&
+          incoming().userId == request.auth.uid &&
+          incoming().id == entryId &&
+          incoming().content is string && incoming().content.size() <= 100000;
+
+        allow update: if isOwner(userId) &&
+          isValidId(entryId) &&
+          incoming().userId == request.auth.uid &&
+          incoming().id == entryId;
+
+        allow delete: if isOwner(userId) && isValidId(entryId);
+      }
+    }
+  }
+}
+
