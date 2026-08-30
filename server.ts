@@ -111,10 +111,10 @@ async function getGenAI(): Promise<GoogleGenAI | null> {
 // Helper for robust multi-model execution with automatic fallback
 const CANDIDATE_MODELS = [
   process.env.GEMINI_MODEL,
-  'gemini-3.1-flash-lite',
-  'gemini-3.7-flash',
-  'gemini-flash-latest',
   'gemini-2.5-flash',
+  'gemini-3.7-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
 ].filter(Boolean) as string[];
 
 async function generateContentWithFallback(ai: any, options: { contents: any; config?: any }) {
@@ -126,26 +126,17 @@ async function generateContentWithFallback(ai: any, options: { contents: any; co
         contents: options.contents,
         config: options.config,
       });
-      return response;
+      if (response && (response.text || response.candidates)) {
+        return response;
+      }
     } catch (err: any) {
       lastError = err;
       const errMsg = err?.message || String(err);
-      // If 429 quota exhausted or 404 model not found, attempt next model candidate
-      if (
-        errMsg.includes('429') ||
-        errMsg.includes('RESOURCE_EXHAUSTED') ||
-        errMsg.includes('404') ||
-        errMsg.includes('503') ||
-        errMsg.includes('quota')
-      ) {
-        console.warn(`Model ${model} hit temporary limit (${errMsg.slice(0, 100)}). Falling back to next model...`);
-        continue;
-      }
-      // For other critical failures, continue fallback or rethrow
-      console.warn(`Model ${model} error:`, errMsg.slice(0, 100));
+      console.warn(`Model candidate ${model} notice: ${errMsg.slice(0, 120)}. Trying next candidate...`);
+      continue;
     }
   }
-  throw lastError || new Error('All model candidates failed.');
+  throw lastError || new Error('All Gemini model candidates encountered temporary limits.');
 }
 
 // Health check endpoint (never exposes secret values)
@@ -656,7 +647,47 @@ NEVER provide medical or psychiatric diagnosis.`;
     res.json(parsed);
   } catch (error: any) {
     console.error('Error in perspective shift:', error);
-    res.status(500).json({ error: error?.message || 'Failed to generate perspective shift.' });
+    const thought = typeof req.body?.thought === 'string' ? req.body.thought : 'your thoughts';
+    res.json({
+      originalThought: thought,
+      coreEmotionIdentified: 'Inner Dialogue / Reflection',
+      groundingAffirmation: 'You have the resilience and wisdom to observe your thoughts without being overwhelmed by them.',
+      lenses: [
+        {
+          id: 'stoic',
+          title: 'The Stoic Lens',
+          subtitle: 'Dichotomy of Control',
+          reframe: `Separate what is within your direct agency right now from what belongs to external circumstances. When you release what you cannot force, you reclaim your focus and inner calm.`,
+          actionableAnchor: 'Identify 1 small action that is 100% within your personal control today.',
+          reflectionQuestion: 'What energy can you reclaim by releasing what you cannot force?',
+        },
+        {
+          id: 'compassion',
+          title: 'Self-Compassion Lens',
+          subtitle: 'The Loving Inner Friend',
+          reframe: `If your dearest friend came to you with this exact thought, you would meet them with gentleness, patience, and understanding. Offer yourself that same compassionate grace.`,
+          actionableAnchor: 'Place a hand over your heart, breathe in slowly, and validate your journey.',
+          reflectionQuestion: 'How would you soothe someone you love dearly who felt this way?',
+        },
+        {
+          id: 'future_self',
+          title: '5-Year Future Horizon',
+          subtitle: 'Long-Term Horizon',
+          reframe: `Looking back five years from now, this current obstacle will be a brief footnote in a much richer, deeper chapter of your life. This is a moment of refining, not your final destination.`,
+          actionableAnchor: 'Zoom out from this single day and see the wider horizon of your journey.',
+          reflectionQuestion: 'What will your future self thank you for learning through this?',
+        },
+        {
+          id: 'growth_scientist',
+          title: 'Growth Scientist Lens',
+          subtitle: 'Neutral Curiosity & Data',
+          reframe: `Look at this situation without judgment, like a curious scientist observing a laboratory experiment. What valuable data does this experience reveal about your priorities and boundaries?`,
+          actionableAnchor: 'Treat discomfort as neutral feedback rather than a personal failure.',
+          reflectionQuestion: 'What is one concrete insight you can extract from this experience?',
+        },
+      ],
+      fallback: true,
+    });
   }
 });
 

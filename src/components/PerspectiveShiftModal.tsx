@@ -97,12 +97,13 @@ export const PerspectiveShiftModal: React.FC<PerspectiveShiftModalProps> = ({
         }),
       });
 
-      if (!res.ok) {
-        throw new Error('Failed to generate perspective shifts.');
-      }
+      const data: PerspectiveShiftResult = await res.json().catch(() => null as any);
 
-      const data: PerspectiveShiftResult = await res.json();
-      setResult(data);
+      if (data && data.lenses && Array.isArray(data.lenses)) {
+        setResult(data);
+      } else {
+        throw new Error('Could not generate perspective shifts at this time.');
+      }
     } catch (err: any) {
       console.error('Perspective shift error:', err);
       setError(err?.message || 'Failed to shift perspective.');
