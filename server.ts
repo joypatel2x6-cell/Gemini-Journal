@@ -37,8 +37,9 @@ async function getGeminiApiKey(): Promise<string | null> {
   }
 
   // 1. Direct environment variable (standard on Vercel and local environments)
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) {
-    cachedGeminiApiKey = process.env.GEMINI_API_KEY.trim();
+  const envKey = process.env.GEMINI_API_KEY?.trim();
+  if (envKey && envKey.length > 0 && envKey !== 'your_gemini_api_key_here' && !envKey.startsWith('your_')) {
+    cachedGeminiApiKey = envKey;
     return cachedGeminiApiKey;
   }
 

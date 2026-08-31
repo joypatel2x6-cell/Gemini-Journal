@@ -15,7 +15,9 @@ const CANDIDATE_MODELS = Array.from(
 
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) return null;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here' || apiKey.startsWith('your_') || apiKey.includes('placeholder')) {
+    return null;
+  }
   return new GoogleGenAI({ apiKey });
 }
 
@@ -56,12 +58,12 @@ export default async function handler(req: any, res: any) {
 
     const ai = getGenAI();
 
-    // Graceful fallback if no API key is configured
+    // Graceful fallback if no valid API key is configured
     if (!ai) {
-      console.warn('[chat] GEMINI_API_KEY is not set. Returning placeholder response.');
+      console.warn('[chat] GEMINI_API_KEY is not set or is set to placeholder.');
       return res.status(200).json({
-        reply: "I'm here to support your reflection. What thoughts or experiences would you like to explore together today?",
-        _notice: 'GEMINI_API_KEY is not configured on this server.',
+        reply: "Welcome! To activate live Gemini responses, please set your GEMINI_API_KEY in Vercel (Project Settings → Environment Variables). What thoughts would you like to explore today?",
+        _notice: 'GEMINI_API_KEY is not configured or is set to placeholder.',
       });
     }
 
@@ -118,14 +120,22 @@ ABSOLUTE RULE: Never provide medical, diagnostic, or clinical psychiatric advice
     });
   } catch (error: any) {
     console.error('[chat] Gemini API error:', error?.message || error);
+    const rawErr = error?.message || String(error);
+    const isKeyError = rawErr.includes('API_KEY_INVALID') || rawErr.includes('API key not valid') || rawErr.includes('INVALID_ARGUMENT');
     const lastUserContent = Array.isArray(req.body?.messages)
       ? req.body.messages.filter((m: any) => m.role === 'user').slice(-1)[0]?.content
       : '';
     const snippet = lastUserContent ? `"${lastUserContent.slice(0, 50)}..."` : 'your thought';
+
+    let notice = 'Gemini API call encountered an issue.';
+    if (isKeyError) {
+      notice = 'Your GEMINI_API_KEY in Vercel appears to be invalid or expired. Please update Vercel Settings → Environment Variables with a key from https://aistudio.google.com/app/apikey.';
+    }
+
     return res.status(200).json({
-      reply: `I received ${snippet}. Taking a moment to pause and write about what you're experiencing is a wonderful step. What aspect of this situation feels most important to reflect on right now?`,
+      reply: `I received ${snippet}. [Note: ${notice}] What aspect of this situation feels most important to reflect on right now?`,
       fallback: true,
-      _notice: error?.message || 'Gemini service encountered a temporary issue.',
+      _notice: rawErr,
     });
   }
 }

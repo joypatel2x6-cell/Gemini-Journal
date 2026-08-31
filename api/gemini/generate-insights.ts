@@ -14,7 +14,9 @@ const CANDIDATE_MODELS = Array.from(
 
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) return null;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here' || apiKey.startsWith('your_') || apiKey.includes('placeholder')) {
+    return null;
+  }
   return new GoogleGenAI({ apiKey });
 }
 
