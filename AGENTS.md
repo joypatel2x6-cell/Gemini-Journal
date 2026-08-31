@@ -32,7 +32,7 @@ This document defines the persistent security, architectural, and quality direct
 - **Prompt Injection Defense**: User entries and journal contents are isolated and formatted within clear delimiter boundaries before submission to LLMs.
 - **Input Validation & Sanitization**: All incoming request bodies are validated for structure, type, and length before processing.
 - **Error Obfuscation**: Production error responses must never expose stack traces, internal paths, raw API keys, or database schemas.
-- **Multi-Model Fallback Engine**: Server-side LLM calls implement graceful cascades across available Gemini models (`gemini-3.1-flash-lite`, `gemini-3.7-flash`, etc.) to guarantee resilience against rate limits or temporary outages.
+- **Multi-Model Fallback Engine**: Server-side LLM calls implement graceful cascades across available Gemini models (`gemini-3.1-flash-lite`, `gemini-3.6-flash`, etc.) to guarantee resilience against rate limits or temporary outages.
 
 ---
 
