@@ -1,12 +1,17 @@
 import { GoogleGenAI } from '@google/genai';
 
 // Valid Gemini model list in priority order
-const CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-].filter(Boolean) as string[];
+const CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      process.env.GEMINI_MODEL,
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+    ].filter(Boolean) as string[]
+  )
+);
 
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -23,22 +28,14 @@ async function generateWithFallback(ai: GoogleGenAI, options: { contents: any; c
         contents: options.contents,
         config: options.config,
       });
-      return response;
+      if (response && (response.text || response.candidates)) {
+        return response;
+      }
     } catch (err: any) {
       lastError = err;
       const msg = err?.message || String(err);
-      if (
-        msg.includes('429') ||
-        msg.includes('RESOURCE_EXHAUSTED') ||
-        msg.includes('404') ||
-        msg.includes('503') ||
-        msg.includes('quota') ||
-        msg.includes('not found')
-      ) {
-        console.warn(`[chat] Model ${model} unavailable (${msg.slice(0, 80)}), trying next...`);
-        continue;
-      }
-      throw err;
+      console.warn(`[chat] Model ${model} unavailable (${msg.slice(0, 80)}). Trying next...`);
+      continue;
     }
   }
   throw lastError || new Error('All Gemini model candidates failed.');
@@ -51,7 +48,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { messages, context } = req.body;
+    const { messages, context } = req.body || {};
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required.' });
@@ -63,7 +60,7 @@ export default async function handler(req: any, res: any) {
     if (!ai) {
       console.warn('[chat] GEMINI_API_KEY is not set. Returning placeholder response.');
       return res.status(200).json({
-        reply: "I'm here to support your reflection. What thoughts or experiences would you like to explore today?",
+        reply: "I'm here to support your reflection. What thoughts or experiences would you like to explore together today?",
         _notice: 'GEMINI_API_KEY is not configured on this server.',
       });
     }
@@ -121,9 +118,14 @@ ABSOLUTE RULE: Never provide medical, diagnostic, or clinical psychiatric advice
     });
   } catch (error: any) {
     console.error('[chat] Gemini API error:', error?.message || error);
-    return res.status(500).json({
-      error: 'Gemini API request failed.',
-      details: error?.message || 'Unknown error. Check server logs.',
+    const lastUserContent = Array.isArray(req.body?.messages)
+      ? req.body.messages.filter((m: any) => m.role === 'user').slice(-1)[0]?.content
+      : '';
+    const snippet = lastUserContent ? `"${lastUserContent.slice(0, 50)}..."` : 'your thought';
+    return res.status(200).json({
+      reply: `I received ${snippet}. Taking a moment to pause and write about what you're experiencing is a wonderful step. What aspect of this situation feels most important to reflect on right now?`,
+      fallback: true,
+      _notice: error?.message || 'Gemini service encountered a temporary issue.',
     });
   }
 }

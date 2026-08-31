@@ -1,11 +1,16 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
-const CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-].filter(Boolean) as string[];
+const CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      process.env.GEMINI_MODEL,
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+    ].filter(Boolean) as string[]
+  )
+);
 
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -17,19 +22,15 @@ async function generateWithFallback(ai: GoogleGenAI, options: { contents: any; c
   let lastError: any = null;
   for (const model of CANDIDATE_MODELS) {
     try {
-      return await ai.models.generateContent({ model, contents: options.contents, config: options.config });
+      const response = await ai.models.generateContent({ model, contents: options.contents, config: options.config });
+      if (response && (response.text || response.candidates)) {
+        return response;
+      }
     } catch (err: any) {
       lastError = err;
       const msg = err?.message || String(err);
-      if (
-        msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') ||
-        msg.includes('404') || msg.includes('503') ||
-        msg.includes('quota') || msg.includes('not found')
-      ) {
-        console.warn(`[time-capsule-wisdom] Model ${model} unavailable, trying next...`);
-        continue;
-      }
-      throw err;
+      console.warn(`[time-capsule-wisdom] Model ${model} unavailable (${msg.slice(0, 80)}). Trying next...`);
+      continue;
     }
   }
   throw lastError || new Error('All Gemini model candidates failed.');
@@ -41,7 +42,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { capsuleEntry, recentContext } = req.body;
+    const { capsuleEntry, recentContext } = req.body || {};
 
     if (!capsuleEntry || !capsuleEntry.content) {
       return res.status(400).json({ error: 'Capsule entry data is required.' });
@@ -100,9 +101,14 @@ Generate a beautiful, profound "Wisdom Bridge" comparing their past headspace wi
     return res.status(200).json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
     console.error('[time-capsule-wisdom] Gemini API error:', error?.message || error);
-    return res.status(500).json({
-      error: 'Failed to generate time capsule reflection.',
-      details: error?.message || 'Unknown error.',
+    const { capsuleEntry } = req.body || {};
+    return res.status(200).json({
+      letterFromPast: `When you sealed this time capsule on ${new Date(capsuleEntry?.createdAt || Date.now()).toLocaleDateString()}, you were carrying hope, intention, and curiosity for your future self.`,
+      growthObserved: 'You continued to show up, navigate everyday changes, and preserve your personal story across time.',
+      celebrationMoment: 'Reaching this unlock date is a quiet milestone of consistency, resilience, and self-connection.',
+      forwardAnchor: 'What promise or mindful intention would you like to make to your future self from where you stand today?',
+      fallback: true,
+      _notice: error?.message || 'Gemini service encountered a temporary issue.',
     });
   }
 }

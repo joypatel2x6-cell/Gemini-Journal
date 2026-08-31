@@ -1,11 +1,16 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
-const CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-].filter(Boolean) as string[];
+const CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      process.env.GEMINI_MODEL,
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+    ].filter(Boolean) as string[]
+  )
+);
 
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -17,19 +22,15 @@ async function generateWithFallback(ai: GoogleGenAI, options: { contents: any; c
   let lastError: any = null;
   for (const model of CANDIDATE_MODELS) {
     try {
-      return await ai.models.generateContent({ model, contents: options.contents, config: options.config });
+      const response = await ai.models.generateContent({ model, contents: options.contents, config: options.config });
+      if (response && (response.text || response.candidates)) {
+        return response;
+      }
     } catch (err: any) {
       lastError = err;
       const msg = err?.message || String(err);
-      if (
-        msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') ||
-        msg.includes('404') || msg.includes('503') ||
-        msg.includes('quota') || msg.includes('not found')
-      ) {
-        console.warn(`[perspective-shift] Model ${model} unavailable, trying next...`);
-        continue;
-      }
-      throw err;
+      console.warn(`[perspective-shift] Model ${model} unavailable (${msg.slice(0, 80)}). Trying next...`);
+      continue;
     }
   }
   throw lastError || new Error('All Gemini model candidates failed.');
@@ -41,7 +42,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { thought, context } = req.body;
+    const { thought, context } = req.body || {};
 
     if (!thought || typeof thought !== 'string' || thought.trim().length === 0) {
       return res.status(400).json({ error: 'A thought or situation is required for perspective shifting.' });
@@ -152,9 +153,47 @@ NEVER provide medical or psychiatric diagnosis.`;
     return res.status(200).json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
     console.error('[perspective-shift] Gemini API error:', error?.message || error);
-    return res.status(500).json({
-      error: 'Failed to generate perspective shift.',
-      details: error?.message || 'Unknown error.',
+    const thought = typeof req.body?.thought === 'string' ? req.body.thought : 'your thoughts';
+    return res.status(200).json({
+      originalThought: thought,
+      coreEmotionIdentified: 'Inner Dialogue / Reflection',
+      groundingAffirmation: 'You have the resilience and wisdom to observe your thoughts without being overwhelmed by them.',
+      lenses: [
+        {
+          id: 'stoic',
+          title: 'The Stoic Lens',
+          subtitle: 'Dichotomy of Control',
+          reframe: `Separate what is within your direct agency right now from what belongs to external circumstances. When you release what you cannot force, you reclaim your focus and inner calm.`,
+          actionableAnchor: 'Identify 1 small action that is 100% within your personal control today.',
+          reflectionQuestion: 'What energy can you reclaim by releasing what you cannot force?',
+        },
+        {
+          id: 'compassion',
+          title: 'Self-Compassion Lens',
+          subtitle: 'The Loving Inner Friend',
+          reframe: `If your dearest friend came to you with this exact thought, you would meet them with gentleness, patience, and understanding. Offer yourself that same compassionate grace.`,
+          actionableAnchor: 'Place a hand over your heart, breathe in slowly, and validate your journey.',
+          reflectionQuestion: 'How would you soothe someone you love dearly who felt this way?',
+        },
+        {
+          id: 'future_self',
+          title: '5-Year Future Horizon',
+          subtitle: 'Long-Term Horizon',
+          reframe: `Looking back five years from now, this current obstacle will be a brief footnote in a much richer, deeper chapter of your life. This is a moment of refining, not your final destination.`,
+          actionableAnchor: 'Zoom out from this single day and see the wider horizon of your journey.',
+          reflectionQuestion: 'What will your future self thank you for learning through this?',
+        },
+        {
+          id: 'growth_scientist',
+          title: 'Growth Scientist Lens',
+          subtitle: 'Neutral Curiosity & Data',
+          reframe: `Look at this situation without judgment, like a curious scientist observing a laboratory experiment. What valuable data does this experience reveal about your priorities and boundaries?`,
+          actionableAnchor: 'Treat discomfort as neutral feedback rather than a personal failure.',
+          reflectionQuestion: 'What is one concrete insight you can extract from this experience?',
+        },
+      ],
+      fallback: true,
+      _notice: error?.message || 'Gemini service encountered a temporary issue.',
     });
   }
 }

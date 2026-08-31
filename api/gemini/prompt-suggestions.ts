@@ -1,11 +1,16 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
-const CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-].filter(Boolean) as string[];
+const CANDIDATE_MODELS = Array.from(
+  new Set(
+    [
+      process.env.GEMINI_MODEL,
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+    ].filter(Boolean) as string[]
+  )
+);
 
 function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -17,19 +22,15 @@ async function generateWithFallback(ai: GoogleGenAI, options: { contents: any; c
   let lastError: any = null;
   for (const model of CANDIDATE_MODELS) {
     try {
-      return await ai.models.generateContent({ model, contents: options.contents, config: options.config });
+      const response = await ai.models.generateContent({ model, contents: options.contents, config: options.config });
+      if (response && (response.text || response.candidates)) {
+        return response;
+      }
     } catch (err: any) {
       lastError = err;
       const msg = err?.message || String(err);
-      if (
-        msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') ||
-        msg.includes('404') || msg.includes('503') ||
-        msg.includes('quota') || msg.includes('not found')
-      ) {
-        console.warn(`[prompt-suggestions] Model ${model} unavailable, trying next...`);
-        continue;
-      }
-      throw err;
+      console.warn(`[prompt-suggestions] Model ${model} unavailable (${msg.slice(0, 80)}). Trying next...`);
+      continue;
     }
   }
   throw lastError || new Error('All Gemini model candidates failed.');
@@ -41,7 +42,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { currentMood, recentTags, theme } = req.body;
+    const { currentMood, recentTags, theme } = req.body || {};
     const ai = getGenAI();
 
     if (!ai) {
@@ -88,9 +89,15 @@ Make the prompts deeply evocative, warm, and inviting.`;
     return res.status(200).json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
     console.error('[prompt-suggestions] Gemini API error:', error?.message || error);
-    return res.status(500).json({
-      error: 'Failed to generate prompt suggestions.',
-      details: error?.message || 'Unknown error.',
+    return res.status(200).json({
+      prompts: [
+        { title: 'Present Moment Awareness', prompt: 'What are three sensory details you notice right now in your space?', category: 'mindfulness' },
+        { title: 'Unsung Strengths', prompt: 'Think back to a challenge from this past week. What personal quality helped you handle it?', category: 'growth' },
+        { title: 'Quiet Gratitude', prompt: 'Who is someone whose presence made your day a little lighter recently, and why?', category: 'gratitude' },
+        { title: 'Letting Go', prompt: 'What is one expectation or worry you are ready to set down before the day ends?', category: 'release' },
+      ],
+      fallback: true,
+      _notice: error?.message || 'Gemini API temporary limit.',
     });
   }
 }

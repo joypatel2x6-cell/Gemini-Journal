@@ -106,14 +106,15 @@ async function getGenAI(): Promise<GoogleGenAI | null> {
 }
 
 // Configurable model with validated supported models
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 const CANDIDATE_MODELS = Array.from(
   new Set(
     [
       process.env.GEMINI_MODEL,
-      'gemini-2.5-flash',
       'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
       'gemini-1.5-flash',
+      'gemini-1.5-pro',
     ].filter(Boolean) as string[]
   )
 );
